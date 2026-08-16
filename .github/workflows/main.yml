@@ -10,49 +10,48 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 240 # Compilações no Windows podem ser mais lentas
+    timeout-minutes: 240 # Builds do Windows podem demorar mais
 
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
 
-      - name: Configurar ambiente MSVC
-        uses: ilammy/msvc-dev-cmd@v1
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
         with:
-          arch: x64
-        # O Windows usa o compilador da Microsoft (MSVC). Esta action configura
-        # as variáveis de ambiente automaticamente para o CMake e Ninja acharem
-        # o compilador cl.exe.
+          python-version: '3.11'
+          architecture: 'x64'
+        # Resolve o erro "Python not found". O Blender exige o 3.11.
 
-      - name: make update (baixa libs pré-compiladas e addons)
-        shell: cmd
-        run: make update
-        # No Windows, o "make update" baixa a pasta "lib/win64_vc15" via SVN.
-        # Essa pasta já contém o OpenImageIO e todas as dependências compiladas.
-        # Isso evita o erro de compilação do OIIO que você estava tendo no Linux.
+      - name: Instalar SVN (necessário para baixar as libs do Windows)
+        shell: pwsh
+        run: choco install -y sliksvn --no-progress
+        # No Windows, o script usa o comando 'svn' para baixar as libs.
 
-      - name: Configurar CMake
+      - name: Aplicar config Lite (para acelerar a compilação)
         shell: cmd
-        run: |
-          cmake -S . -B build -G Ninja ^
-            -C build_files\cmake\config\blender_lite.cmake ^
-            -DCMAKE_BUILD_TYPE=Release ^
-            -DWITH_COMPILER_CCACHE=OFF
-        # Nota: Usamos "shell: cmd" no Windows para garantir que o "^" funcione
-        # como quebra de linha corretamente. O CCACHE é desativado pois não
-        # vem configurado por padrão no Windows do GitHub Actions.
+        run: copy /Y build_files\cmake\config\blender_lite.cmake build_files\cmake\config\blender_release.cmake
+        # O make.bat usa o blender_release.cmake por padrão.
+        # Isso substitui a config pesada pela lite automaticamente.
 
-      - name: Compilar
+      - name: Baixar libs e atualizar (make.bat update)
         shell: cmd
-        run: cmake --build build --parallel %NUMBER_OF_PROCESSORS%
+        run: make.bat update
+        # Usa o script nativo do Windows, que não dá o erro de VS not found.
+
+      - name: Compilar (make.bat)
+        shell: cmd
+        run: make.bat
+        # O make.bat encontra o Visual Studio sozinho, configura o CMake 
+        # e compila com o Ninja.
         
-      # Opcional: Se você quiser fazer o upload do .exe gerado para baixar
       - name: Upload do Executável
         uses: actions/upload-artifact@v4
         with:
           name: goo-engine-windows
-          # O executável do Blender/Goo-Engine geralmente é gerado em:
-          # build\bin\Release\blender.exe (ou goo-engine.exe, dependendo do projeto)
+          # O executável e as DLLs são gerados nesta pasta:
           path: |
             build/bin/Release/*.exe
             build/bin/Release/*.dll
+            build/bin/Release/*.py
+            build/bin/Release/datafiles
