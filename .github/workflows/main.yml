@@ -1,4 +1,6 @@
-name: CMake Build (Windows)
+name: CMake Build (Linux)
+
+# Coloque este arquivo em: .github/workflows/main.yml
 
 on:
   push:
@@ -7,57 +9,66 @@ on:
     branches: [ "goo-engine-main" ]
   workflow_dispatch:
 
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
 jobs:
   build:
-    runs-on: windows-latest
-    timeout-minutes: 240
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
 
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
-
-      - name: Configurar Python 3.11
-        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          architecture: 'x64'
+          path: src
+        # Checkout em "src" de propósito: o make_update.py baixa as libs
+        # pré-compiladas para "../lib" (pasta irmã da raiz do repo).
 
-      - name: Instalar SVN e Ninja
-        shell: pwsh
+      - name: Cache das libs pré-compiladas e do ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            lib
+            .ccache
+          key: linux-libs-v1
+          restore-keys: |
+            linux-libs-
+        # As libs pré-compiladas (OIIO, OpenColorIO, OpenEXR etc.) têm alguns
+        # GB e raramente mudam — cachear evita baixar tudo de novo a cada run.
+        # Se um dia precisar forçar um download limpo, mude "v1" pra "v2".
+
+      - name: Instalar Python 3.11 (única versão suportada pelo CMake)
         run: |
-          choco install -y sliksvn --no-progress
-          choco install -y ninja --no-progress
-        # Instala o SVN para baixar as libs e o Ninja para acelerar a compilação
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y python3.11 python3.11-dev python3.11-venv
+        # As libs pré-compiladas do Linux não incluem Python — o projeto
+        # espera que o 3.11 venha do sistema mesmo.
 
-      - name: Configurar ambiente MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-        # Esta action configura o compilador do Visual Studio (cl.exe) perfeitamente
+      - name: Instalar ferramentas de build
+        working-directory: src
+        run: |
+          sudo apt-get update
+          sudo python3 build_files/build_environment/install_linux_packages.py --all
+          sudo apt-get install -y ccache subversion
+        # Continua necessário: compiladores, cmake, ninja, svn, e libs que só
+        # podem vir do sistema mesmo (X11, Wayland, DBus, ALSA/Pulse etc.).
 
-      - name: Baixar libs pré-compiladas (make update via Python)
-        shell: cmd
-        run: python build_files\utils\make_update.py
-        # Em vez de usar make.bat, chamamos o script Python diretamente.
-        # Isso usa o Python 3.11 que acabamos de instalar e evita o erro.
+      - name: make update (baixa libs pré-compiladas + addons/assets)
+        working-directory: src
+        run: python3 build_files/utils/make_update.py --use-linux-libraries
 
       - name: Configurar CMake
-        shell: cmd
+        working-directory: src
         run: |
-          cmake -S . -B build -G Ninja ^
-            -C build_files\cmake\config\blender_lite.cmake ^
-            -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja \
+            -C build_files/cmake/config/blender_lite.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_COMPILER_CCACHE=ON
 
       - name: Compilar
-        shell: cmd
-        run: cmake --build build --parallel %NUMBER_OF_PROCESSORS%
-        
-      - name: Upload do Executável
-        uses: actions/upload-artifact@v4
-        with:
-          name: goo-engine-windows
-          path: |
-            build/bin/Release/*.exe
-            build/bin/Release/*.dll
-            build/bin/Release/*.py
-            build/bin/Release/datafiles
+        working-directory: src
+        run: cmake --build build --parallel "$(nproc)"
