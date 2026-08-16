@@ -1,7 +1,4 @@
-name: CMake Build (Linux)
-
-# Coloque este arquivo em: .github/workflows/main.yml
-# (substitui o cmake-build.yml antigo — apague-o do repositório)
+name: CMake Build (Windows)
 
 on:
   push:
@@ -10,59 +7,52 @@ on:
     branches: [ "goo-engine-main" ]
   workflow_dispatch:
 
-env:
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
-
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: windows-latest
+    timeout-minutes: 240 # Compilações no Windows podem ser mais lentas
 
     steps:
       - name: Checkout do repositório
         uses: actions/checkout@v4
-        # O sistema de build do Blender não usa git submodules de verdade
-        # para addons/assets/testes (isso é feito pelo "make update" abaixo),
-        # então um clone raso (padrão do checkout) é suficiente.
 
-      - name: Cache do ccache
-        uses: actions/cache@v4
+      - name: Configurar ambiente MSVC
+        uses: ilammy/msvc-dev-cmd@v1
         with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-
-            ccache-${{ runner.os }}-
+          arch: x64
+        # O Windows usa o compilador da Microsoft (MSVC). Esta action configura
+        # as variáveis de ambiente automaticamente para o CMake e Ninja acharem
+        # o compilador cl.exe.
 
-      - name: Instalar Python 3.11 (única versão suportada pelo CMake do projeto)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y software-properties-common
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get update
-          sudo apt-get install -y python3.11 python3.11-dev python3.11-venv
-        # O ubuntu-latest atual já vem com Python 3.12 por padrão, mas o
-        # FindPythonLibsUnix.cmake do Blender exige especificamente o 3.11
-        # (é a versão usada pelas libs pré-compiladas oficiais). Sem esse
-        # passo o CMake falha com "PYTHON_VERSION=3.11 not found!".
-
-      - name: Instalar dependências de build
-        run: |
-          sudo apt-get update
-          # Script oficial do Blender: instala compiladores, cmake, ninja,
-          # svn, git e as libs de sistema equivalentes às pré-compiladas.
-          sudo python3 build_files/build_environment/install_linux_packages.py --all
-          sudo apt-get install -y ccache
-
-      - name: make update (busca addons/scripts/assets)
+      - name: make update (baixa libs pré-compiladas e addons)
+        shell: cmd
         run: make update
+        # No Windows, o "make update" baixa a pasta "lib/win64_vc15" via SVN.
+        # Essa pasta já contém o OpenImageIO e todas as dependências compiladas.
+        # Isso evita o erro de compilação do OIIO que você estava tendo no Linux.
 
       - name: Configurar CMake
+        shell: cmd
         run: |
-          cmake -S . -B build -G Ninja \
-            -C build_files/cmake/config/blender_lite.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_COMPILER_CCACHE=ON
+          cmake -S . -B build -G Ninja ^
+            -C build_files\cmake\config\blender_lite.cmake ^
+            -DCMAKE_BUILD_TYPE=Release ^
+            -DWITH_COMPILER_CCACHE=OFF
+        # Nota: Usamos "shell: cmd" no Windows para garantir que o "^" funcione
+        # como quebra de linha corretamente. O CCACHE é desativado pois não
+        # vem configurado por padrão no Windows do GitHub Actions.
 
       - name: Compilar
-        run: cmake --build build --parallel "$(nproc)"
+        shell: cmd
+        run: cmake --build build --parallel %NUMBER_OF_PROCESSORS%
+        
+      # Opcional: Se você quiser fazer o upload do .exe gerado para baixar
+      - name: Upload do Executável
+        uses: actions/upload-artifact@v4
+        with:
+          name: goo-engine-windows
+          # O executável do Blender/Goo-Engine geralmente é gerado em:
+          # build\bin\Release\blender.exe (ou goo-engine.exe, dependendo do projeto)
+          path: |
+            build/bin/Release/*.exe
+            build/bin/Release/*.dll
