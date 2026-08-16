@@ -1,0 +1,55 @@
+name: CMake Build (Linux)
+
+# Coloque este arquivo em: .github/workflows/cmake-build.yml
+
+on:
+  push:
+    branches: [ "goo-engine-main" ]
+  pull_request:
+    branches: [ "goo-engine-main" ]
+  workflow_dispatch:
+
+env:
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout do repositório
+        uses: actions/checkout@v4
+        # O sistema de build do Blender não usa git submodules de verdade
+        # para addons/assets/testes (isso é feito pelo "make update" abaixo),
+        # então um clone raso (padrão do checkout) é suficiente.
+
+      - name: Cache do ccache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ccache-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-${{ runner.os }}-${{ github.ref_name }}-
+            ccache-${{ runner.os }}-
+
+      - name: Instalar dependências de build
+        run: |
+          sudo apt-get update
+          # Script oficial do Blender: instala compiladores, cmake, ninja,
+          # svn, git e as libs de sistema equivalentes às pré-compiladas.
+          sudo python3 build_files/build_environment/install_linux_packages.py --all
+          sudo apt-get install -y ccache
+
+      - name: make update (busca addons/scripts/assets)
+        run: make update
+
+      - name: Configurar CMake
+        run: |
+          cmake -S . -B build -G Ninja \
+            -C build_files/cmake/config/blender_lite.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWITH_COMPILER_CCACHE=ON
+
+      - name: Compilar
+        run: cmake --build build --parallel "$(nproc)"
