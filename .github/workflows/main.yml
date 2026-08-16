@@ -10,7 +10,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 240 # Builds do Windows podem demorar mais
+    timeout-minutes: 240
 
     steps:
       - name: Checkout do repositório
@@ -21,35 +21,41 @@ jobs:
         with:
           python-version: '3.11'
           architecture: 'x64'
-        # Resolve o erro "Python not found". O Blender exige o 3.11.
 
-      - name: Instalar SVN (necessário para baixar as libs do Windows)
+      - name: Instalar SVN e Ninja
         shell: pwsh
-        run: choco install -y sliksvn --no-progress
-        # No Windows, o script usa o comando 'svn' para baixar as libs.
+        run: |
+          choco install -y sliksvn --no-progress
+          choco install -y ninja --no-progress
+        # Instala o SVN para baixar as libs e o Ninja para acelerar a compilação
 
-      - name: Aplicar config Lite (para acelerar a compilação)
-        shell: cmd
-        run: copy /Y build_files\cmake\config\blender_lite.cmake build_files\cmake\config\blender_release.cmake
-        # O make.bat usa o blender_release.cmake por padrão.
-        # Isso substitui a config pesada pela lite automaticamente.
+      - name: Configurar ambiente MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+        # Esta action configura o compilador do Visual Studio (cl.exe) perfeitamente
 
-      - name: Baixar libs e atualizar (make.bat update)
+      - name: Baixar libs pré-compiladas (make update via Python)
         shell: cmd
-        run: make.bat update
-        # Usa o script nativo do Windows, que não dá o erro de VS not found.
+        run: python build_files\utils\make_update.py
+        # Em vez de usar make.bat, chamamos o script Python diretamente.
+        # Isso usa o Python 3.11 que acabamos de instalar e evita o erro.
 
-      - name: Compilar (make.bat)
+      - name: Configurar CMake
         shell: cmd
-        run: make.bat
-        # O make.bat encontra o Visual Studio sozinho, configura o CMake 
-        # e compila com o Ninja.
+        run: |
+          cmake -S . -B build -G Ninja ^
+            -C build_files\cmake\config\blender_lite.cmake ^
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Compilar
+        shell: cmd
+        run: cmake --build build --parallel %NUMBER_OF_PROCESSORS%
         
       - name: Upload do Executável
         uses: actions/upload-artifact@v4
         with:
           name: goo-engine-windows
-          # O executável e as DLLs são gerados nesta pasta:
           path: |
             build/bin/Release/*.exe
             build/bin/Release/*.dll
