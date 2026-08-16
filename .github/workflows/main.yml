@@ -31,12 +31,13 @@ jobs:
           path: |
             lib
             .ccache
-          key: linux-libs-v1
+          key: linux-libs-v2
           restore-keys: |
             linux-libs-
-        # As libs pré-compiladas (OIIO, OpenColorIO, OpenEXR etc.) têm alguns
-        # GB e raramente mudam — cachear evita baixar tudo de novo a cada run.
-        # Se um dia precisar forçar um download limpo, mude "v1" pra "v2".
+        # As libs pré-compiladas têm alguns GB e raramente mudam — cachear
+        # evita baixar tudo de novo a cada run. Se precisar forçar um
+        # download limpo (ex: mudou algo na exclusão do llvm), suba a versão
+        # da key (v2 -> v3).
 
       - name: Instalar Python 3.11 (única versão suportada pelo CMake)
         run: |
@@ -54,12 +55,40 @@ jobs:
           sudo apt-get update
           sudo python3 build_files/build_environment/install_linux_packages.py --all
           sudo apt-get install -y ccache subversion
-        # Continua necessário: compiladores, cmake, ninja, svn, e libs que só
-        # podem vir do sistema mesmo (X11, Wayland, DBus, ALSA/Pulse etc.).
 
-      - name: make update (baixa libs pré-compiladas + addons/assets)
+      - name: Baixar libs pré-compiladas (checkout esparso, sem o llvm)
+        working-directory: src
+        run: |
+          set -e
+          LIBDIR="../lib/linux_x86_64_glibc_228"
+          SVN_URL="https://svn.blender.org/svnroot/bf-blender/trunk/lib/linux_x86_64_glibc_228"
+
+          mkdir -p ../lib
+
+          if [ ! -d "$LIBDIR/.svn" ]; then
+            svn checkout --non-interactive --depth=immediates "$SVN_URL" "$LIBDIR"
+          fi
+
+          # WITH_LLVM está OFF no preset lite (só é usado pelo OSL/Cycles,
+          # que também estão desligados). O llvm é de longe o maior
+          # componente do pacote e foi o que estourou o rate limit (HTTP 429)
+          # do svn.blender.org. Excluindo ele explicitamente:
+          svn update --non-interactive --set-depth=exclude "$LIBDIR/llvm" 2>/dev/null || true
+
+          for i in 1 2 3 4 5 6; do
+            svn cleanup "$LIBDIR" || true
+            if svn update --non-interactive --set-depth=infinity "$LIBDIR"; then
+              break
+            fi
+            echo "svn update falhou (tentativa $i/6), provavelmente rate limit (HTTP 429). Aguardando..."
+            sleep $((i * 45))
+          done
+
+      - name: make update (addons/scripts/assets)
         working-directory: src
         run: python3 build_files/utils/make_update.py --use-linux-libraries
+        # A pasta de libs já existe (baixamos ela manualmente acima), então
+        # esse passo só cuida do resto: addons, scripts e assets.
 
       - name: Configurar CMake
         working-directory: src
