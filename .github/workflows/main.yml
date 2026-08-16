@@ -1,6 +1,7 @@
 name: CMake Build (Linux)
 
-# Coloque este arquivo em: .github/workflows/cmake-build.yml
+# Coloque este arquivo em: .github/workflows/main.yml
+# (substitui o cmake-build.yml antigo — apague-o do repositório)
 
 on:
   push:
@@ -32,6 +33,18 @@ jobs:
           restore-keys: |
             ccache-${{ runner.os }}-${{ github.ref_name }}-
             ccache-${{ runner.os }}-
+
+      - name: Instalar Python 3.11 (única versão suportada pelo CMake do projeto)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y software-properties-common
+          sudo add-apt-repository -y ppa:deadsnakes/ppa
+          sudo apt-get update
+          sudo apt-get install -y python3.11 python3.11-dev python3.11-venv
+        # O ubuntu-latest atual já vem com Python 3.12 por padrão, mas o
+        # FindPythonLibsUnix.cmake do Blender exige especificamente o 3.11
+        # (é a versão usada pelas libs pré-compiladas oficiais). Sem esse
+        # passo o CMake falha com "PYTHON_VERSION=3.11 not found!".
 
       - name: Instalar dependências de build
         run: |
