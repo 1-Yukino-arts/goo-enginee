@@ -38,7 +38,7 @@ jobs:
         run: command -v svn || choco install svn -y
 
       - name: Configurar ambiente do Visual Studio
-        uses: ilammy/msvc-dev-cmd@v2
+        uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
@@ -83,15 +83,16 @@ jobs:
 
       - name: Configurar CMake
         working-directory: src
-        shell: bash
-        run: |
-          cmake -S . -B build -G Ninja \
-            -C build_files/cmake/config/blender_lite.cmake \
-            -DCMAKE_BUILD_TYPE=Release
+        shell: pwsh
+        # Usando pwsh (não bash) aqui de propósito: com "shell: bash" no
+        # Windows, o Git Bash acaba colocando /usr/bin/link na frente do
+        # link.exe do MSVC no PATH, quebrando o build (é um problema
+        # conhecido e documentado da própria action msvc-dev-cmd).
+        run: cmake -S . -B build -G Ninja -C build_files/cmake/config/blender_lite.cmake -DCMAKE_BUILD_TYPE=Release
 
       - name: Compilar
         working-directory: src
-        shell: bash
+        shell: pwsh
         run: cmake --build build --parallel
 
       - name: Empacotar release
