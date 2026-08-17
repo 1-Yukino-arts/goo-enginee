@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: lib
-          key: windows-libs-v1
+          key: windows-libs-v2
           restore-keys: |
             windows-libs-
         # As libs pré-compiladas têm alguns GB e raramente mudam — cachear
@@ -54,44 +54,69 @@ jobs:
         with:
           arch: x64
 
-      - name: Baixar libs pré-compiladas (checkout esparso, sem o llvm)
+      - name: Baixar libs pré-compiladas (checkout esparso, sem componentes não usados)
         working-directory: src
         shell: bash
         run: |
           set -e
-          LIBDIR="../lib/win64_vc15"
-          SVN_URL="https://svn.blender.org/svnroot/bf-blender/trunk/lib/win64_vc15"
-
+          SVN_BASE="https://svn.blender.org/svnroot/bf-blender/trunk/lib/"
           mkdir -p ../lib
 
-          if [ ! -d "$LIBDIR/.svn" ]; then
-            svn checkout --non-interactive --depth=immediates "$SVN_URL" "$LIBDIR"
-          fi
-
-          # WITH_LLVM está OFF no preset lite (só é usado pelo OSL/Cycles,
-          # que também estão desligados). O llvm é de longe o maior
-          # componente do pacote e é o que mais facilmente estoura o rate
-          # limit (HTTP 429) do svn.blender.org. Excluindo ele explicitamente:
-          svn update --non-interactive --set-depth=exclude "$LIBDIR/llvm" 2>/dev/null || true
-
-          for i in 1 2 3 4 5 6; do
-            svn cleanup "$LIBDIR" || true
-            if svn update --non-interactive --set-depth=infinity "$LIBDIR"; then
-              break
+          fetch_sparse() {
+            local dir="$1" url="$2"
+            if [ ! -d "$dir/.svn" ]; then
+              svn checkout --non-interactive --depth=immediates "$url" "$dir"
             fi
-            echo "svn update falhou (tentativa $i/6), provavelmente rate limit (HTTP 429). Aguardando..."
-            sleep $((i * 45))
+          }
+
+          retry_update() {
+            local dir="$1"
+            for i in 1 2 3 4 5 6; do
+              svn cleanup "$dir" || true
+              if svn update --non-interactive --set-depth=infinity "$dir"; then
+                return 0
+              fi
+              echo "svn update falhou em $dir (tentativa $i/6), provavelmente rate limit (HTTP 429). Aguardando..."
+              sleep $((i * 45))
+            done
+            return 1
+          }
+
+          LIBDIR="../lib/win64_vc15"
+          fetch_sparse "$LIBDIR" "${SVN_BASE}win64_vc15"
+
+          # Auditei build_files/cmake/config/blender_lite.cmake (todas as
+          # flags WITH_* que estão OFF) e excluí os componentes grandes e
+          # autocontidos correspondentes, que não são usados por esse preset
+          # nem são dependência de nada que continua ligado (JPEG/PNG/ZLIB/
+          # Zstd/Epoxy/Freetype/OpenImageIO/OpenEXR/Python/etc. permanecem).
+          EXCLUDE_DIRS=(
+            llvm usd materialx opensubdiv openvdb embree osl alembic
+            opencollada draco openimagedenoise xr-openxr-sdk openxr-sdk
+            boost tbb ffmpeg opencolorio gmp fftw3 sndfile vorbis opus vpx
+            theora lame potrace pugixml haru quadriflow nanovdb level-zero
+          )
+          for d in "${EXCLUDE_DIRS[@]}"; do
+            svn update --non-interactive --set-depth=exclude "$LIBDIR/$d" 2>/dev/null || true
           done
 
-      - name: make update (addons/scripts/assets)
+          retry_update "$LIBDIR"
+
+          # Buscando também os "assets" aqui (com o mesmo retry), pra que o
+          # make_update.py não precise baixar nada por conta própria depois
+          # — o passe de update interno dele não tem proteção contra 429.
+          ASSETSDIR="../lib/assets"
+          fetch_sparse "$ASSETSDIR" "${SVN_BASE}assets"
+          retry_update "$ASSETSDIR"
+
+      - name: make update (addons/scripts)
         working-directory: src
         shell: bash
         run: python build_files/utils/make_update.py
-        # No Windows a plataforma já é detectada automaticamente pelo script
-        # (não existe uma flag "--use-windows-libraries"). A pasta de libs já
-        # existe (baixamos ela manualmente acima), então isso só cuida do
-        # resto: addons, scripts e assets. O Python já vem embutido no
-        # pacote de libs pré-compiladas, não precisa instalar à parte.
+        # Libs pré-compiladas e assets já estão sincronizados pelo passo
+        # anterior (com retry). Esse passo só cuida de addons/scripts via
+        # git, além de conferir rapidamente que lib/assets estão em dia —
+        # como já estão, isso deve ser praticamente instantâneo.
 
       - name: Configurar CMake
         working-directory: src
