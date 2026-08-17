@@ -12,7 +12,7 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
 
     steps:
       - name: Checkout do repositório
@@ -26,7 +26,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: lib
-          key: windows-libs-v2
+          key: windows-libs-v3
           restore-keys: |
             windows-libs-
         # As libs pré-compiladas têm alguns GB e raramente mudam — cachear
@@ -71,13 +71,17 @@ jobs:
 
           retry_update() {
             local dir="$1"
-            for i in 1 2 3 4 5 6; do
+            local max_attempts=8
+            local i wait
+            for ((i = 1; i <= max_attempts; i++)); do
               svn cleanup "$dir" || true
               if svn update --non-interactive --set-depth=infinity "$dir"; then
                 return 0
               fi
-              echo "svn update falhou em $dir (tentativa $i/6), provavelmente rate limit (HTTP 429). Aguardando..."
-              sleep $((i * 45))
+              wait=$((i * 30))
+              if [ "$wait" -gt 180 ]; then wait=180; fi
+              echo "svn update falhou em $dir (tentativa $i/$max_attempts), provavelmente rate limit (HTTP 429). Aguardando ${wait}s..."
+              sleep "$wait"
             done
             return 1
           }
@@ -100,6 +104,18 @@ jobs:
             svn update --non-interactive --set-depth=exclude "$LIBDIR/$d" 2>/dev/null || true
           done
 
+          # Atualiza cada subpasta restante SEPARADAMENTE, com uma pausa
+          # entre elas, em vez de um "svn update" único pra árvore inteira.
+          # O servidor parece limitar pela taxa SUSTENTADA de requisições
+          # (travou de novo depois de ~17min contínuos mesmo já excluindo os
+          # componentes grandes), então quebrar em pedaços com respiro entre
+          # eles ajuda mais do que só esperar depois de falhar.
+          for entry in "$LIBDIR"/*/; do
+            [ -d "${entry}.svn" ] || continue
+            echo "Atualizando: $entry"
+            retry_update "$entry"
+            sleep 8
+          done
           retry_update "$LIBDIR"
 
           # Buscando também os "assets" aqui (com o mesmo retry), pra que o
@@ -107,6 +123,7 @@ jobs:
           # — o passe de update interno dele não tem proteção contra 429.
           ASSETSDIR="../lib/assets"
           fetch_sparse "$ASSETSDIR" "${SVN_BASE}assets"
+          sleep 8
           retry_update "$ASSETSDIR"
 
       - name: make update (addons/scripts)
@@ -144,6 +161,9 @@ jobs:
       - name: Upload do pacote
         uses: actions/upload-artifact@v4
         with:
+          name: goo-engine-windows-x86_64
+          path: dist/goo-engine-windows-x86_64.zip
+          retention-days: 14
           name: goo-engine-windows-x86_64
           path: dist/goo-engine-windows-x86_64.zip
           retention-days: 14
