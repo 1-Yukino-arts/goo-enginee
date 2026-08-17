@@ -1,4 +1,4 @@
-name: CMake Build (Linux)
+name: CMake Build (Windows)
 
 # Coloque este arquivo em: .github/workflows/main.yml
 
@@ -9,13 +9,10 @@ on:
     branches: [ "goo-engine-main" ]
   workflow_dispatch:
 
-env:
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
-
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
+    runs-on: windows-latest
+    timeout-minutes: 180
 
     steps:
       - name: Checkout do repositório
@@ -25,43 +22,33 @@ jobs:
         # Checkout em "src" de propósito: o make_update.py baixa as libs
         # pré-compiladas para "../lib" (pasta irmã da raiz do repo).
 
-      - name: Cache das libs pré-compiladas e do ccache
+      - name: Cache das libs pré-compiladas
         uses: actions/cache@v4
         with:
-          path: |
-            lib
-            .ccache
-          key: linux-libs-v2
+          path: lib
+          key: windows-libs-v1
           restore-keys: |
-            linux-libs-
+            windows-libs-
         # As libs pré-compiladas têm alguns GB e raramente mudam — cachear
         # evita baixar tudo de novo a cada run. Se precisar forçar um
-        # download limpo (ex: mudou algo na exclusão do llvm), suba a versão
-        # da key (v2 -> v3).
+        # download limpo, suba a versão da key (v1 -> v2).
 
-      - name: Instalar Python 3.11 (única versão suportada pelo CMake)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y software-properties-common
-          sudo add-apt-repository -y ppa:deadsnakes/ppa
-          sudo apt-get update
-          sudo apt-get install -y python3.11 python3.11-dev python3.11-venv
-        # As libs pré-compiladas do Linux não incluem Python — o projeto
-        # espera que o 3.11 venha do sistema mesmo.
+      - name: Garantir que o svn está disponível
+        shell: bash
+        run: command -v svn || choco install svn -y
 
-      - name: Instalar ferramentas de build
-        working-directory: src
-        run: |
-          sudo apt-get update
-          sudo python3 build_files/build_environment/install_linux_packages.py --all
-          sudo apt-get install -y ccache subversion
+      - name: Configurar ambiente do Visual Studio
+        uses: ilammy/msvc-dev-cmd@v2
+        with:
+          arch: x64
 
       - name: Baixar libs pré-compiladas (checkout esparso, sem o llvm)
         working-directory: src
+        shell: bash
         run: |
           set -e
-          LIBDIR="../lib/linux_x86_64_glibc_228"
-          SVN_URL="https://svn.blender.org/svnroot/bf-blender/trunk/lib/linux_x86_64_glibc_228"
+          LIBDIR="../lib/win64_vc15"
+          SVN_URL="https://svn.blender.org/svnroot/bf-blender/trunk/lib/win64_vc15"
 
           mkdir -p ../lib
 
@@ -71,8 +58,8 @@ jobs:
 
           # WITH_LLVM está OFF no preset lite (só é usado pelo OSL/Cycles,
           # que também estão desligados). O llvm é de longe o maior
-          # componente do pacote e foi o que estourou o rate limit (HTTP 429)
-          # do svn.blender.org. Excluindo ele explicitamente:
+          # componente do pacote e é o que mais facilmente estoura o rate
+          # limit (HTTP 429) do svn.blender.org. Excluindo ele explicitamente:
           svn update --non-interactive --set-depth=exclude "$LIBDIR/llvm" 2>/dev/null || true
 
           for i in 1 2 3 4 5 6; do
@@ -86,18 +73,39 @@ jobs:
 
       - name: make update (addons/scripts/assets)
         working-directory: src
-        run: python3 build_files/utils/make_update.py --use-linux-libraries
-        # A pasta de libs já existe (baixamos ela manualmente acima), então
-        # esse passo só cuida do resto: addons, scripts e assets.
+        shell: bash
+        run: python build_files/utils/make_update.py
+        # No Windows a plataforma já é detectada automaticamente pelo script
+        # (não existe uma flag "--use-windows-libraries"). A pasta de libs já
+        # existe (baixamos ela manualmente acima), então isso só cuida do
+        # resto: addons, scripts e assets. O Python já vem embutido no
+        # pacote de libs pré-compiladas, não precisa instalar à parte.
 
       - name: Configurar CMake
         working-directory: src
+        shell: bash
         run: |
           cmake -S . -B build -G Ninja \
             -C build_files/cmake/config/blender_lite.cmake \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DWITH_COMPILER_CCACHE=ON
+            -DCMAKE_BUILD_TYPE=Release
 
       - name: Compilar
         working-directory: src
-        run: cmake --build build --parallel "$(nproc)"
+        shell: bash
+        run: cmake --build build --parallel
+
+      - name: Empacotar release
+        working-directory: src
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path ..\dist | Out-Null
+          Compress-Archive -Path build\bin\* -DestinationPath ..\dist\goo-engine-windows-x86_64.zip
+        # O ninja já deixa o executável pronto pra rodar em build/bin
+        # (binário + datafiles + scripts), sem precisar de "install" à parte.
+
+      - name: Upload do pacote
+        uses: actions/upload-artifact@v4
+        with:
+          name: goo-engine-windows-x86_64
+          path: dist/goo-engine-windows-x86_64.zip
+          retention-days: 14
