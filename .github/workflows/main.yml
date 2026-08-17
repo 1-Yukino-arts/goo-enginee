@@ -164,6 +164,3 @@ jobs:
           name: goo-engine-windows-x86_64
           path: dist/goo-engine-windows-x86_64.zip
           retention-days: 14
-          name: goo-engine-windows-x86_64
-          path: dist/goo-engine-windows-x86_64.zip
-          retention-days: 14
