@@ -34,8 +34,17 @@ jobs:
         # download limpo, suba a versão da key (v1 -> v2).
 
       - name: Garantir que o svn está disponível
-        shell: bash
-        run: command -v svn || choco install svn -y
+        shell: pwsh
+        run: |
+          if (-not (Get-Command svn -ErrorAction SilentlyContinue)) {
+            choco install svn -y --no-progress
+          }
+          # O choco não propaga o PATH pros próximos steps sozinho — cada
+          # step é um processo novo. Adicionando manualmente os locais
+          # possíveis do svn.exe via $GITHUB_PATH (não tem problema se algum
+          # desses caminhos não existir, é só ignorado):
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\Program Files\SlikSvn\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value "C:\ProgramData\chocolatey\bin"
 
       - name: Configurar ambiente do Visual Studio
         uses: ilammy/msvc-dev-cmd@v1
